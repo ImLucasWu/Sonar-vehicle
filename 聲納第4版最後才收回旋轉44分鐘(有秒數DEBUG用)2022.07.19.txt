@@ -1,0 +1,210 @@
+#include <Servo.h>
+#include "LowPower.h"
+Servo myservo; // 建立Servo物件，控制伺服馬達
+#include <Timer.h>
+///////////////////////////////////////////(全開測試穩定度模式)
+#define Hall_Sensor_S1 13   //霍爾感測器，數位輸出連結 Arduino pin 13
+#define Hall_Sensor_S2 12
+/////////////////////////////////////////////
+const byte swPin = 2;
+volatile byte state = 0;
+void wakeISR() {
+  state = 1;
+}
+
+///////////////////////////////////////////
+unsigned long T3;      //建立計時器物件3  (伺服馬達運作計時)
+unsigned long lastTime;
+unsigned long now;
+unsigned long Time;
+int j = 0;
+int i = 0;
+///////////////////////////////////////////
+void(* resetFunc) (void) = 0;//重至
+
+void MegaReset()//重至
+{
+  resetFunc();
+}
+/////////////////////////////////////
+void Open_equipment() {
+
+  digitalWrite(8, HIGH);
+  Serial.println("4G Router開啟");
+  delay(1000);
+
+  digitalWrite(3, HIGH);
+  Serial.println("分析螢幕開啟");
+  delay(120000);
+
+  digitalWrite(10, HIGH);
+  Serial.println("聲納處理器開啟");
+  delay(1000);
+
+  digitalWrite(4, HIGH);
+  Serial.println("小電腦開啟");
+  delay(40000);
+
+}
+
+void Off_equipment()
+{
+  digitalWrite(10, LOW);
+  delay(500);
+  Serial.println("聲納處理器關閉");
+  digitalWrite(3, LOW);
+  delay(500);
+  Serial.println("分析螢幕關閉");
+  digitalWrite(4, LOW);
+  delay(500);
+  Serial.println("小電腦關閉");
+  digitalWrite(8, LOW);
+  delay(500);
+  Serial.println("4G Router關閉");
+  digitalWrite(5, LOW); digitalWrite(6, LOW); digitalWrite(9, LOW); digitalWrite(7, LOW);
+  delay(500);
+  Serial.println("推桿 及 編碼器 關閉");
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+
+void timotion_go()
+{
+  while (1) {
+    T3 = millis();
+    if (T3 < 180000) {
+      Serial.println(T3);
+    }
+//    digitalWrite(9, HIGH); //編碼器開啟
+    digitalWrite(5, HIGH); digitalWrite(9, LOW); //推桿推出
+    if (T3 > 180000) {
+      digitalWrite(5, LOW); digitalWrite(9, LOW); //推桿大於20秒後，推桿斷電
+//      digitalWrite(9, LOW); //編碼器斷電
+      Serial.println("推桿到達水下 推桿斷電");
+      Serial.println("伺服馬達開始旋轉");
+      digitalWrite(7, HIGH);  //伺服馬達開
+//      Serial.println("伺服馬達開");
+      break;
+    }
+    else {
+//      Serial.println("推桿前進中");
+      delay(100);
+    }
+  }
+}
+
+
+void server_moto_run()
+{
+  unsigned long lastTime = millis();
+  unsigned long now = millis();
+  while (T3 > 180000 && now - lastTime <= 2640000) //{   推桿到水下後、旋轉44分   
+  {
+    now = millis();
+    switch ( i ) {
+      case 0 :
+        j += 1;
+        myservo.write(j); // 使用write，傳入角度，從0度轉到180度
+        delay(400);
+        Serial.println(j);
+//        Serial.println("伺服馬達旋轉1");
+        Serial.println(now);
+        if (j == 180 )
+        {
+          i = 1;
+        }
+        break;
+      case 1 :
+        j -= 1;
+        myservo.write(j); // 使用write，傳入角度，從0度轉到180度
+        delay(400);
+        Serial.println(j);
+//        Serial.println("伺服馬達旋轉2");
+        Serial.println(now);
+        if (j == 0 )
+        {
+          i = 0;
+        }
+        break;
+    }
+  }
+  digitalWrite(7, LOW);  //伺服馬達關
+}
+
+void timotion_go_home()
+{
+
+  unsigned long lastTime2 = millis();
+  unsigned long now2 = millis();
+  while ( now2  >= 2855000 &&  now2  <= 2875000 ) {     //伺服馬達轉完30分後，推桿收回    結束前30秒收回，前10秒收到底
+    now2 = millis();
+//    digitalWrite(9, HIGH); //編碼器開啟 
+    digitalWrite(5, LOW); digitalWrite(9, HIGH); //推桿收回
+    Serial.println("推桿收回中");
+    Serial.println(now2);
+
+  }
+  if (now2  > 2875000) {
+    digitalWrite(5, LOW); digitalWrite(9, LOW); //推桿斷電
+//    digitalWrite(9, LOW); //編碼器斷電
+    Serial.println("推桿已收回至吊臂架 推桿斷電 編碼器斷電");
+  }
+  
+  if (now2 > 2885000)
+  {
+    Off_equipment();
+    MegaReset();
+  }
+}
+
+void sonor_run()
+{
+  unsigned long lastTime4 = millis();
+  unsigned long now4 = millis();
+  while (T3 > 180000 && now - lastTime <= 2800000)
+  {
+    now4 = millis();
+    Serial.println(now4 - lastTime4);
+
+    while (now4 - lastTime4 <= 20000)
+    {
+      timotion_go_home();
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(3, OUTPUT); // 分析螢幕          繼電器1
+  pinMode(10, OUTPUT); // 聲納處理器       繼電器2
+  pinMode(4, OUTPUT); // 小電腦            繼電器3
+  pinMode(5, OUTPUT); // 推桿 正端+        繼電器4
+  pinMode(6, OUTPUT); // 空轉             繼電器5
+  pinMode(7, OUTPUT); // 伺服馬達(降壓模組) 繼電器6
+  pinMode(8, OUTPUT); // 4G ROUTER        繼電器7
+  pinMode(9, OUTPUT); // 推桿 正端-        繼電器8
+  myservo.attach(11);
+  pinMode(swPin, INPUT_PULLUP);
+  //digitalWrite(swPin, HIGH);
+  attachInterrupt(digitalPinToInterrupt(swPin), wakeISR, LOW);
+  Serial.println("系統啟動");
+  state = 0;
+}
+
+void loop() {
+  if (state == 1) {
+    Serial.println(" 開啟聲納系統 ");
+    Open_equipment();
+    timotion_go();
+    server_moto_run();
+    sonor_run();
+
+
+  }
+  if (state == 0) {
+    Serial.println("Go to sleep...");
+    delay(1000);
+    LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF);
+  }
+}

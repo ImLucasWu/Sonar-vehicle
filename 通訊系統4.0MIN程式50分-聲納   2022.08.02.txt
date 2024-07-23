@@ -1,0 +1,198 @@
+#define VT_PIN A0               // 電壓sensor RX
+#define ARDUINO_WORK_VOLTAGE 2.5//電壓sensor參考電壓
+#include <DFRobot_DHT20.h>      //溫溼度感測模組
+#include <SoftwareSerial.h>     //虛擬序列
+#include "Timer.h"
+//#include <wire.h>
+
+////////////////////////////////////////////////////////
+DFRobot_DHT20 dht20;                //溫溼度感測模組,白SDA 4,黃色SCL 5
+double voltage;                     //電壓
+volatile int vvsumpercentage = 0;   //電壓百分比,初始=0
+const byte swPin = 4;               //中斷
+String otaaString;                  //LORA字串
+String Y_accepted;                  //LORA join字串
+String gy;
+volatile unsigned long lastTime = 0;//計時用
+volatile unsigned long lastTime1 = 0;//計時用
+volatile bool sleepstate = 0;       //LORA狀態
+float temp;                         //溫度
+double vvsum;
+char dat[64];                       //LORA回傳值
+char bat[64];                       //LORA回傳值
+char cat[64];                       //LORA回傳值
+byte i;
+byte j;
+//bool swLoRa = HIGH;
+//byte battery = 21;                //電池容量
+//byte batteryquantity = 1;         //電池數量
+//byte batterysurplus = 0;          //電池剩餘容量 ,初始=0
+
+SoftwareSerial mySerial(2, 3);      //RX, TX
+Timer t_otaa;                       //otaa reset
+
+
+///////////////////////////////////////////////////////
+void(* resetFunc) (void) = 0;//重至
+
+void LoRaReset() { //重至
+  resetFunc();
+}
+
+void LoRaotaa() {
+  Serial.println(F("LoRa join otaa..."));
+  mySerial.print("sip reset");  //LORA回傳
+  delay(2000);
+  mySerial.print("mac join otaa");
+  while (1) {
+    LoRaData();
+    Y_accepted = otaaString.substring(5, 13); //擷取字串
+    if (Y_accepted == "accepted") {//連線成功
+      mySerial.print("mac tx ucnf 15 0000");
+      delay(7000);
+      break;
+    }
+    t_otaa.update();//更新時間(沒連線)
+  }
+}
+
+String LoRaData() {
+  if (mySerial.available()) {//如果LoRa有回應
+    otaaString = mySerial.readString();
+    Serial.println(otaaString);
+
+  }
+  return otaaString;
+}
+
+double voltagedisplay() {
+  double vsum = 0;  //電壓總和
+  //double vvsum = 0; //總和平均-電表電壓差
+  for (int i = 0; i < 10; i++) { //量測10次
+    int vt_temp = analogRead(VT_PIN);//電壓值
+    voltage = vt_temp * (ARDUINO_WORK_VOLTAGE / 1024.0) * 5 + 5.72+0.3; //換算為真實值
+    vsum += voltage; //量測電壓數值相加--與電表的誤差值
+  }
+  vvsum = vsum / 10 ;//電壓模組量測10次取平均
+  //Serial.print(vvsum);  //量測10比取平均
+  //Serial.print(" V/ ");
+  return vvsum;
+}
+
+float displaycf() {//溫溼度感測
+  dht20.begin();
+  temp = dht20.getTemperature();
+  //Serial.print("temperature:"); Serial.print(temp); Serial.println("C");
+  return temp;
+}
+
+void LoRajudge() {
+  if (otaaString.substring(14, 18) == "0001") {
+    digitalWrite(6, HIGH); //溫溼度感測模組繼電器
+    delay(1000);
+    mySerial.print("mac tx ucnf 15 0001");
+    delay(7000);
+    for (int i = 0; i < 10; i++)
+    {
+      voltagedisplay();
+      displaycf();
+    }
+    //Serial.print(vvsum);
+    int vvsum_1 = vvsum * 100;
+    sprintf(dat, "mac tx ucnf 15 %04d", vvsum_1);  //LORA回傳
+    //Serial.println(dat);
+    mySerial.print(dat);  //LORA回傳
+    delay(7000);
+    int temp_1 = temp * 10;
+    sprintf(bat, "mac tx ucnf 15 %04d", temp_1 );
+    //Serial.println(bat);
+    mySerial.print(bat);
+    delay(7000);
+    if (vvsum_1 >= 1135) {
+      mySerial.print("mac tx ucnf 15 0002");
+      //Serial.println(F("喚醒"));
+      delay(7000);
+      digitalWrite(swPin, LOW);
+      delay(100);
+      digitalWrite(swPin, HIGH);
+      lastTime1 = millis();
+      while (1) {
+        unsigned long now = millis();
+        displaycf();
+        if (temp >= 40) {
+          digitalWrite(7, HIGH);
+
+        }
+        if (temp <= 35) {
+
+          digitalWrite(7, LOW);
+
+        }
+        if (now - lastTime1 >= 3000000) {/////////////////////////
+          temp_1 = temp * 10;
+          sprintf(bat, "mac tx ucnf 15 %04d", temp_1 );
+          //Serial.println(bat);
+          mySerial.print(bat);
+          delay(7000);
+          digitalWrite(7, LOW);
+          for (int i = 0; i < 10; i++)
+          {
+            voltagedisplay();
+          }
+          digitalWrite(6, LOW);
+          vvsum_1 = vvsum * 100;
+          sprintf(dat, "mac tx ucnf 15 %04d", vvsum_1);
+          //Serial.println(dat);
+          mySerial.print(dat);
+          delay(7000);
+          break;
+        }
+      }
+    }
+    else {
+      mySerial.print("mac tx ucnf 15 0003");
+      //Serial.println(F("電力不足"));
+      delay(7000);
+      //digitalWrite(5, LOW);
+      digitalWrite(6, LOW);
+    }
+  }
+}
+
+////////////////////////////////////////////////////////
+void setup() {
+  Serial.begin(9600);
+  mySerial.begin(9600);           //LORA
+  //pinMode(5, OUTPUT);             //電壓感測模組繼電器
+  pinMode(6, OUTPUT);             //溫溼度感測模組繼電器
+  pinMode(7, OUTPUT);             //風扇繼電器
+  pinMode(A0, INPUT);             //電壓
+  pinMode(swPin, OUTPUT);
+  digitalWrite(swPin, HIGH);      //中斷
+  t_otaa.every(20000, LoRaReset); //20秒Reset
+  sleepstate = 0;                 //LORA狀態
+  voltagedisplay();
+  LoRaotaa();
+  lastTime = millis();            //計時
+}
+
+void loop() {
+  LoRaData();
+  LoRajudge();
+  unsigned long now = millis();
+  //Serial.println(now - lastTime);
+  if (now - lastTime >= 60000) {/////////////////////////////
+    lastTime = now;
+    sleepstate = !sleepstate;
+    if (sleepstate == 0) {
+      mySerial.print("1");
+      Serial.println(F("lora醒"));
+      delay(2000);
+      LoRaReset();
+    }
+    else if (sleepstate == 1) {
+      mySerial.print("sip sleep 70 uart_on");
+      Serial.println(F("lora睡"));
+    }
+  }
+}
